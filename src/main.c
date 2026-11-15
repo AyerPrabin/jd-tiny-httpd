@@ -13,6 +13,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,14 +24,27 @@
 #include <time.h>
 #include <unistd.h>
 
-#define READ_TIMEOUT_SECONDS 5
+#define READ_TIMEOUT_SECONDS 5   /* for the whole request head, not per read */
+#define SEND_TIMEOUT_SECONDS 10  /* for the whole response */
 
 static char root_real[HTTP_MAX_PATH];
 static size_t root_len;
 
+static long long now_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+/* Deadline for sending the current response; set in handle_client(). */
+static long long send_deadline;
+
 static int write_all(int fd, const char *buf, size_t len)
 {
     while (len > 0) {
+        if (now_ms() > send_deadline)
+            return -1;   /* a client that stops reading can't hold us forever */
         ssize_t n = write(fd, buf, len);
         if (n < 0) {
             if (errno == EINTR)
@@ -43,12 +57,26 @@ static int write_all(int fd, const char *buf, size_t len)
     return 0;
 }
 
-/* Read until the end of the request head, a full buffer, or EOF. */
+/*
+ * Read until the end of the request head, a full buffer, EOF, or the deadline.
+ * The deadline covers the whole head, so a client sending one byte every few
+ * seconds can't keep the (single-threaded) server busy.
+ */
 static size_t read_request(int fd, char *buf, size_t cap)
 {
     size_t used = 0;
+    long long deadline = now_ms() + READ_TIMEOUT_SECONDS * 1000LL;
 
     while (used < cap) {
+        long long left = deadline - now_ms();
+        if (left <= 0)
+            break;
+        struct pollfd p = { .fd = fd, .events = POLLIN };
+        int ready = poll(&p, 1, (int)left);
+        if (ready < 0 && errno == EINTR)
+            continue;
+        if (ready <= 0)
+            break;
         ssize_t n = read(fd, buf + used, cap - used);
         if (n < 0 && errno == EINTR)
             continue;
@@ -82,6 +110,31 @@ static void log_request(const struct sockaddr_in *peer,
            code, bytes);
 }
 
+/* Is this path inside the served root? */
+static int inside_root(const char *real)
+{
+    if (root_len == 1 && root_real[0] == '/')
+        return 1;
+    return strncmp(real, root_real, root_len) == 0 &&
+           (real[root_len] == '/' || real[root_len] == '\0');
+}
+
+/*
+ * After open(), ask the kernel where the descriptor really points. This closes
+ * the gap between realpath() and open(): if a folder on the way was swapped for
+ * a symlink in between, the opened file is outside the root and is refused.
+ */
+static int fd_inside_root(int fd)
+{
+    char link[64], real[HTTP_MAX_PATH];
+    snprintf(link, sizeof link, "/proc/self/fd/%d", fd);
+    ssize_t n = readlink(link, real, sizeof real - 1);
+    if (n < 0)
+        return 0;
+    real[n] = '\0';
+    return inside_root(real);
+}
+
 /*
  * Open the file behind path. realpath() follows any symlinks, and the result
  * must still be inside the root, so a link pointing at /etc is refused.
@@ -94,9 +147,7 @@ static int open_file(const char *path, int *fd, off_t *size,
     if (!real)
         return errno == EACCES ? 403 : 404;
 
-    if (strncmp(real, root_real, root_len) != 0 ||
-        (real[root_len] != '/' && real[root_len] != '\0' &&
-         !(root_len == 1 && root_real[0] == '/'))) {
+    if (!inside_root(real)) {
         free(real);
         return 403;
     }
@@ -121,15 +172,15 @@ static int open_file(const char *path, int *fd, off_t *size,
         return 403;
     }
 
-    *fd = open(real, O_RDONLY);
+    *fd = open(real, O_RDONLY | O_NOFOLLOW);
     if (*fd < 0) {
         int code = errno == EACCES ? 403 : 404;
         free(real);
         return code;
     }
 
-    /* Check again on the open file in case it changed after stat(). */
-    if (fstat(*fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+    /* Check the file we actually opened, in case it changed after realpath(). */
+    if (fstat(*fd, &st) != 0 || !S_ISREG(st.st_mode) || !fd_inside_root(*fd)) {
         close(*fd);
         free(real);
         return 403;
@@ -194,8 +245,9 @@ static void handle_client(int client, const struct sockaddr_in *peer)
     struct http_request req;
     unsigned long long bytes;
 
-    struct timeval tv = { READ_TIMEOUT_SECONDS, 0 };
-    setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    struct timeval tv = { SEND_TIMEOUT_SECONDS, 0 };
+    setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+    send_deadline = now_ms() + SEND_TIMEOUT_SECONDS * 1000LL;
 
     size_t len = read_request(client, buf, HTTP_MAX_REQUEST);
     if (len == 0)

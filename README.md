@@ -114,10 +114,21 @@ There is a second check in `main.c`. Before opening a file, the server calls
 of the root. This catches symlinks inside the served folder that point
 somewhere else.
 
+`realpath()` and `open()` are two separate steps, so in theory a folder could
+be swapped for a symlink in the gap between them. To close that gap the file
+is opened with `O_NOFOLLOW`, and then the server asks the kernel where the
+open descriptor really points (`/proc/self/fd/N`) and refuses it if that is
+outside the root. The check is on the file that was actually opened, not on
+the name that was checked earlier.
+
 ### Other choices
 
-- One connection is handled at a time. A slow client could hold things up,
-  so each connection gets a five second read timeout.
+- One connection is handled at a time, so a slow client could hold things up.
+  Reading the request head has a five second deadline for the whole head
+  (using `poll()` with the time left), not five seconds per read, so a client
+  that sends one byte every few seconds is cut off. Sending the response has
+  a ten second deadline and a send timeout, so a client that stops reading
+  can't stall the server either.
 - `SIGPIPE` is ignored, so a browser that closes the tab half way through a
   download does not kill the server.
 - The request head is capped at 8 KB and the target at 2048 bytes. A longer
