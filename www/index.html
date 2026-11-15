@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jd-tiny-httpd</title>
+<style>
+  :root {
+    --bg: #161C14;
+    --gold: #DBA958;
+    --cream: #F2EEE3;
+    --muted: rgba(242, 238, 227, .7);
+    --line: rgba(242, 238, 227, .1);
+    --card: rgba(242, 238, 227, .04);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--cream);
+    font: 400 1rem/1.65 Inter, system-ui, sans-serif;
+  }
+  h1, h2 {
+    margin: 0;
+    font-family: "Cormorant Garamond", Georgia, serif;
+    font-weight: 600;
+    color: var(--gold);
+  }
+  a { color: var(--gold); }
+  nav {
+    display: flex;
+    justify-content: center;
+    gap: 4px;
+    width: max-content;
+    max-width: calc(100% - 32px);
+    margin: 32px auto 0;
+    padding: 6px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+  }
+  nav a {
+    padding: 8px 18px;
+    border-radius: 999px;
+    color: var(--muted);
+    font-size: .9rem;
+    text-decoration: none;
+  }
+  nav a:hover { color: var(--cream); }
+  main {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 96px 16px 80px;
+  }
+  .hero { text-align: center; }
+  .hero h1 { font-size: clamp(2.6rem, 8vw, 4.2rem); line-height: 1.05; }
+  .hero p { max-width: 520px; margin: 20px auto 36px; color: var(--muted); }
+  .button {
+    display: inline-block;
+    padding: 12px 28px;
+    border-radius: 999px;
+    background: var(--gold);
+    color: var(--bg);
+    font-weight: 600;
+    text-decoration: none;
+  }
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 16px;
+    margin-top: 88px;
+  }
+  .card {
+    padding: 28px;
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    background: var(--card);
+  }
+  .card h2 { font-size: 1.5rem; margin-bottom: 8px; }
+  .card p { margin: 0; color: var(--muted); font-size: .95rem; }
+  code {
+    font: .9em ui-monospace, Consolas, monospace;
+    color: var(--cream);
+  }
+  footer {
+    padding: 32px 16px 48px;
+    text-align: center;
+    color: var(--muted);
+    font-size: .85rem;
+    border-top: 1px solid var(--line);
+  }
+</style>
+</head>
+<body>
+<nav>
+  <a href="/">Home</a>
+  <a href="#try">Try it</a>
+  <a href="/no-such-page">404 page</a>
+</nav>
+
+<main>
+  <section class="hero">
+    <h1>It works.</h1>
+    <p>This page is being served by jd-tiny-httpd, a small static file server
+       written in C with nothing but the POSIX socket calls.</p>
+    <a class="button" href="#try">Things to try</a>
+  </section>
+
+  <section class="cards" id="try">
+    <div class="card">
+      <h2>Missing file</h2>
+      <p>Ask for <code>/no-such-page</code> and you get the 404 page.</p>
+    </div>
+    <div class="card">
+      <h2>Traversal</h2>
+      <p>Send <code>/../etc/passwd</code> with <code>curl --path-as-is</code> and it is refused with a 403.</p>
+    </div>
+    <div class="card">
+      <h2>HEAD</h2>
+      <p><code>curl -I</code> returns the same headers as GET with no body.</p>
+    </div>
+  </section>
+</main>
+
+<footer>Served from the www folder. Edit this file and refresh.</footer>
+</body>
+</html>

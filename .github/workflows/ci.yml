@@ -1,0 +1,72 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install valgrind
+        run: sudo apt-get update && sudo apt-get install -y valgrind
+
+      - name: Build
+        run: make
+
+      - name: Unit tests
+        run: make test
+
+      - name: Unit tests under valgrind
+        run: valgrind --leak-check=full --error-exitcode=1 ./test_http
+
+      - name: Smoke test
+        run: |
+          set -eu
+          tmp=$(mktemp -d)
+          mkdir -p "$tmp/root/docs"
+          echo "hello from the test" > "$tmp/root/hello.txt"
+          echo "<h1>docs</h1>" > "$tmp/root/docs/index.html"
+          echo "should never be served" > "$tmp/secret.txt"
+          ln -s "$tmp/secret.txt" "$tmp/root/link.txt"
+
+          ./jd-tiny-httpd 8099 "$tmp/root" > "$tmp/access.log" 2>&1 &
+          pid=$!
+          trap 'kill $pid 2>/dev/null || true; cat "$tmp/access.log"' EXIT
+
+          base=http://127.0.0.1:8099
+          curl -sf --retry 10 --retry-connrefused --retry-delay 1 "$base/hello.txt" -o /dev/null
+
+          status() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
+          expect() {
+            want=$1; shift
+            got=$(status "$@")
+            echo "$want <- $got  $*"
+            [ "$got" = "$want" ]
+          }
+
+          body=$(curl -s "$base/hello.txt")
+          [ "$body" = "hello from the test" ]
+          curl -sI "$base/hello.txt" | grep -i '^content-type: text/plain'
+
+          expect 200 "$base/hello.txt"
+          expect 200 "$base/docs/"
+          expect 200 "$base/docs"
+          expect 200 -I "$base/hello.txt"
+          expect 404 "$base/missing.txt"
+          expect 403 --path-as-is "$base/../secret.txt"
+          expect 403 --path-as-is "$base/docs/../../secret.txt"
+          expect 403 --path-as-is "$base/%2e%2e/secret.txt"
+          expect 403 --path-as-is "$base/%2e%2e%2fsecret.txt"
+          expect 403 "$base/link.txt"
+          expect 405 -X POST "$base/hello.txt"
+          expect 414 "$base/$(head -c 3000 /dev/zero | tr '\0' a)"
+
+          # HEAD must give the same length as GET and no body.
+          len=$(curl -sI "$base/hello.txt" | tr -d '\r' | awk 'tolower($1)=="content-length:" {print $2}')
+          [ "$len" = "20" ]
+          [ "$(curl -s -I "$base/hello.txt" -o /dev/null -w '%{size_download}')" = "0" ]
+
+          grep -q '"GET /hello.txt HTTP/1.1" 200' "$tmp/access.log"

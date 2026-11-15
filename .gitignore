@@ -1,0 +1,9 @@
+# build output
+/jd-tiny-httpd
+/test_http
+*.o
+*.exe
+
+# editors
+.vscode/
+*.swp
